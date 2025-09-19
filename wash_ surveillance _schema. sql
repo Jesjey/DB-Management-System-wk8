@@ -1,1 +1,180 @@
 
+-- Question 1: A complete DataBase Management System
+-- ==============================================================
+-- WASH Surveillance DB schema
+-- File: wash_surveillance_schema.sql
+-- ==============================================================
+
+CREATE DATABASE wash_surveillance
+  CHARACTER SET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci;
+
+USE wash_surveillance;
+
+-- ==============================================================
+-- Table: schools
+-- ==============================================================
+CREATE TABLE schools (
+    school_id        INT AUTO_INCREMENT PRIMARY KEY,
+    school_code      VARCHAR(50) NOT NULL UNIQUE,
+    name             VARCHAR(255) NOT NULL,
+    county           VARCHAR(100),
+    subcounty        VARCHAR(100),
+    address          VARCHAR(255),
+    phone            VARCHAR(50),
+    email            VARCHAR(150),
+    created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+-- ==============================================================
+-- Table: school_profiles (One-to-One with schools)
+-- ==============================================================
+CREATE TABLE school_profiles (
+    school_id             INT PRIMARY KEY,
+    total_enrollment      INT NOT NULL DEFAULT 0,
+    female_students       INT DEFAULT NULL,
+    male_students         INT DEFAULT NULL,
+    has_handwashing_policy TINYINT(1) NOT NULL DEFAULT 0,
+    water_supply_type     ENUM('Piped','Borehole','Well','Rainwater','Delivered','None','Other') DEFAULT 'None',
+    notes                 TEXT,
+    CONSTRAINT fk_profile_school FOREIGN KEY (school_id) REFERENCES schools(school_id) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB;
+
+-- ==============================================================
+-- Table: water_sources (One-to-Many: schools -> water_sources)
+-- ==============================================================
+CREATE TABLE water_sources (
+    water_source_id INT AUTO_INCREMENT PRIMARY KEY,
+    school_id       INT NOT NULL,
+    source_type     ENUM('Piped','Borehole','Well','Rainwater','Delivered','Other') NOT NULL,
+    is_functional   TINYINT(1) NOT NULL DEFAULT 1,
+    capacity_liters INT DEFAULT NULL,
+    last_test_date  DATE,
+    notes           TEXT,
+    created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_water_school FOREIGN KEY (school_id) REFERENCES schools(school_id) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB;
+
+CREATE INDEX idx_water_school_fn ON water_sources(school_id, is_functional);
+
+-- ==============================================================
+-- Table: sanitation_facilities (One-to-Many)
+-- ==============================================================
+CREATE TABLE sanitation_facilities (
+    facility_id      INT AUTO_INCREMENT PRIMARY KEY,
+    school_id        INT NOT NULL,
+    facility_type    ENUM('Toilet','Urinal','PitLatrine','Flush','Compost','Other') NOT NULL,
+    gender_target    ENUM('Male','Female','Unisex','Mixed') DEFAULT 'Unisex',
+    count_units      INT NOT NULL DEFAULT 1,
+    is_functional    TINYINT(1) NOT NULL DEFAULT 1,
+    last_maintenance DATE,
+    notes            TEXT,
+    CONSTRAINT fk_facility_school FOREIGN KEY (school_id) REFERENCES schools(school_id) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB;
+
+CREATE INDEX idx_facility_school ON sanitation_facilities(school_id);
+
+-- ==============================================================
+-- Table: inspectors
+-- ==============================================================
+CREATE TABLE inspectors (
+    inspector_id    INT AUTO_INCREMENT PRIMARY KEY,
+    username        VARCHAR(100) NOT NULL UNIQUE,
+    full_name       VARCHAR(150) NOT NULL,
+    phone           VARCHAR(50),
+    email           VARCHAR(150) UNIQUE,
+    role            VARCHAR(50) DEFAULT 'inspector',
+    active          TINYINT(1) NOT NULL DEFAULT 1,
+    created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+-- ==============================================================
+-- Table: inspections (One-to-Many)
+-- ==============================================================
+CREATE TABLE inspections (
+    inspection_id   INT AUTO_INCREMENT PRIMARY KEY,
+    school_id       INT NOT NULL,
+    inspector_id    INT, -- made nullable to allow ON DELETE SET NULL
+    inspection_date DATE NOT NULL,
+    overall_score   DECIMAL(5,2) DEFAULT NULL,
+    notes           TEXT,
+    created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_inspect_school FOREIGN KEY (school_id) REFERENCES schools(school_id) ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT fk_inspector FOREIGN KEY (inspector_id) REFERENCES inspectors(inspector_id) ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=InnoDB;
+
+CREATE INDEX idx_inspections_school_date ON inspections(school_id, inspection_date);
+CREATE INDEX idx_inspections_inspector ON inspections(inspector_id);
+
+-- ==============================================================
+-- Table: indicators
+-- ==============================================================
+CREATE TABLE indicators (
+    indicator_id    INT AUTO_INCREMENT PRIMARY KEY,
+    code            VARCHAR(50) NOT NULL UNIQUE,
+    description     VARCHAR(255) NOT NULL,
+    measure_type    ENUM('boolean','count','text','percent','enum') NOT NULL DEFAULT 'boolean'
+) ENGINE=InnoDB;
+
+-- ==============================================================
+-- Table: inspection_findings (Many-to-Many)
+-- ==============================================================
+CREATE TABLE inspection_findings (
+    inspection_id   INT NOT NULL,
+    indicator_id    INT NOT NULL,
+    value_text      TEXT,
+    value_number    DECIMAL(10,2) DEFAULT NULL,
+    value_boolean   TINYINT(1) DEFAULT NULL,
+    recorded_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (inspection_id, indicator_id),
+    CONSTRAINT fk_finding_inspection FOREIGN KEY (inspection_id) REFERENCES inspections(inspection_id) ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT fk_finding_indicator FOREIGN KEY (indicator_id) REFERENCES indicators(indicator_id) ON DELETE RESTRICT ON UPDATE CASCADE
+) ENGINE=InnoDB;
+
+CREATE INDEX idx_finding_indicator ON inspection_findings(indicator_id);
+
+-- ==============================================================
+-- Table: maintenance_providers
+-- ==============================================================
+CREATE TABLE maintenance_providers (
+    provider_id    INT AUTO_INCREMENT PRIMARY KEY,
+    name           VARCHAR(255) NOT NULL,
+    contact_person VARCHAR(150),
+    phone          VARCHAR(50),
+    email          VARCHAR(150),
+    UNIQUE (name)
+) ENGINE=InnoDB;
+
+-- ==============================================================
+-- Table: facility_providers (Many-to-Many)
+-- ==============================================================
+CREATE TABLE facility_providers (
+    facility_id    INT NOT NULL,
+    provider_id    INT NOT NULL,
+    assigned_on    DATE NOT NULL,
+    assigned_until DATE DEFAULT NULL,
+    notes          TEXT,
+    PRIMARY KEY (facility_id, provider_id, assigned_on),
+    CONSTRAINT fk_fp_facility FOREIGN KEY (facility_id) REFERENCES sanitation_facilities(facility_id) ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT fk_fp_provider FOREIGN KEY (provider_id) REFERENCES maintenance_providers(provider_id) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB;
+
+CREATE INDEX idx_facility_provider ON facility_providers(provider_id);
+
+-- ==============================================================
+-- View: school_latest_inspection
+-- ==============================================================
+CREATE OR REPLACE VIEW vw_school_latest_inspection AS
+SELECT school_id, school_code, name, inspection_id, inspection_date, overall_score
+FROM (
+  SELECT s.school_id, s.school_code, s.name,
+         i.inspection_id, i.inspection_date, i.overall_score,
+         ROW_NUMBER() OVER (PARTITION BY s.school_id ORDER BY i.inspection_date DESC) AS rn
+  FROM schools s
+  LEFT JOIN inspections i ON i.school_id = s.school_id
+) t
+WHERE rn = 1;
+
+-- end of the schema designed by Jescah Ondeche
+
